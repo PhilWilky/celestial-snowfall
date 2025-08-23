@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Night Sky Snowfall — Refactored</title>
+<style>
+  :root{
+    --star-count: 80;
+    --snow-density: 220;
+    --shooting-star-interval-min: 4000;
+    --shooting-star-interval-max: 10000;
+  }
+
+  html,body{height:100%;margin:0}
+  body{
+    background:
+      radial-gradient(1200px 800px at 70% 15%, #1d2a44 0%, #0b1220 60%, #060b12 100%);
+    color:#cfe7ff;
+    font-family: system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Noto Sans";
+    overflow-x:hidden;
+  }
+
+  .ui{
+    position: fixed;
+    left: 16px;
+    bottom: 16px;
+    z-index: 10000;
+    display:flex;
+    gap:12px;
+    align-items:center;
+    padding:10px 12px;
+    background: rgba(10,14,22,.55);
+    border:1px solid rgba(255,255,255,.08);
+    border-radius: 12px;
+    backdrop-filter: blur(4px);
+    pointer-events: auto;
+  }
+  .ui label{font-size:14px; opacity:.9}
+  .ui input[type="range"]{ width:160px}
+  .ui button{
+    all:unset; cursor:pointer; padding:6px 10px; border-radius:10px;
+    border:1px solid rgba(255,255,255,.1); background: rgba(255,255,255,.06); font-size:14px;
+  }
+  .ui button:hover{ background: rgba(255,255,255,.12) }
+
+  .layer {
+    position: fixed; 
+    inset: 0; 
+    pointer-events: none;
+  }
+  
+  #sky { z-index: 1; }
+  #shooting-stars { z-index: 2; }
+  #snow-container { z-index: 3; }
+
+  .star{
+    position:absolute; width:2px; height:2px; border-radius:50%;
+    background: #cfe7ff; opacity: .7; box-shadow: 0 0 8px #a6c7ff;
+    animation: twinkle 3.5s ease-in-out infinite;
+  }
+  @keyframes twinkle{ 0%,100%{opacity:.25} 50%{opacity:1} }
+
+  .moon{
+    position:absolute; top: 6vh; right: 8vw; width: 120px;
+    filter: drop-shadow(0 0 18px rgba(220,235,255,.6)) drop-shadow(0 0 36px rgba(120,170,255,.25));
+    opacity:.95;
+  }
+
+  .snowflake{ position:absolute; will-change: transform, opacity; }
+  .snowflake svg{ display:block }
+
+  .shoot{
+    position:absolute; width: 160px; height:2px;
+    background: linear-gradient(90deg, rgba(255,255,255,.9), rgba(255,255,255,0));
+    border-radius: 2px; filter: drop-shadow(0 0 6px white);
+  }
+
+  body.paused .star { animation-play-state: paused; }
+
+  @media (prefers-reduced-motion: reduce){
+    .star{ animation: none }
+  }
+</style>
+</head>
+<body>
+
+<div id="sky" class="layer" aria-hidden="true"></div>
+<div id="shooting-stars" class="layer" aria-hidden="true"></div>
+<div id="snow-container" class="layer" aria-hidden="true"></div>
+
+<svg class="moon" viewBox="0 0 100 100" aria-hidden="true">
+  <defs>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#fffdf5"/>
+      <stop offset="60%" stop-color="#f1f6ff"/>
+      <stop offset="100%" stop-color="#c9d7ff"/>
+    </radialGradient>
+  </defs>
+  <circle cx="50" cy="50" r="35" fill="url(#glow)"/>
+  <circle cx="60" cy="42" r="4" fill="#c7d6ff" opacity=".6"/>
+  <circle cx="45" cy="60" r="3" fill="#c7d6ff" opacity=".5"/>
+  <circle cx="38" cy="47" r="2.5" fill="#c7d6ff" opacity=".55"/>
+</svg>
+
+<div class="ui">
+  <button id="toggle">Pause</button>
+  <label>Density
+    <input id="density" type="range" min="1" max="10" step="1" value="5" />
+  </label>
+</div>
+
+<script>
+// Configuration and state
+const CONFIG = {
+  prefersReduced: window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches ?? false,
+  starCount: () => parseInt(getComputedStyle(document.documentElement).getPropertyValue('--star-count').trim() || '80', 10),
+  snowflakeSVGs: [
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+       <path d="M12 2v20M2 12h20M4 4l16 16M20 4L4 20" stroke="deepskyblue" stroke-width="2" fill="none"/>
+     </svg>`,
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+       <circle cx="12" cy="12" r="2" fill="deepskyblue"/>
+       <path d="M12 2v20M2 12h20M4 4l16 16M20 4L4 20" stroke="deepskyblue" stroke-width="2" fill="none"/>
+     </svg>`
+  ]
+};
+
+// Utility functions
+const Utils = {
+  random: (min, max) => Math.random() * (max - min) + min,
+  randomInt: (min, max) => Math.floor(Utils.random(min, max + 1)),
+  randomChoice: (array) => array[Utils.randomInt(0, array.length - 1)],
+  getCSSVar: (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim(),
+  $: (selector) => document.querySelector(selector),
+  $$ : (selector) => document.querySelectorAll(selector)
+};
+
+// Star field manager
+const StarField = {
+  container: null,
+  
+  init() {
+    this.container = Utils.$('#sky');
+    this.generate();
+  },
+  
+  generate() {
+    const count = CONFIG.prefersReduced ? Math.floor(CONFIG.starCount() / 2) : CONFIG.starCount();
+    
+    for (let i = 0; i < count; i++) {
+      this.createStar();
+    }
+  },
+  
+  createStar() {
+    const star = document.createElement('div');
+    star.className = 'star';
+    
+    const size = Math.random() < 0.15 ? 3 : 2;
+    star.style.width = star.style.height = size + 'px';
+    star.style.left = Utils.random(0, 100) + 'vw';
+    star.style.top = Utils.random(0, 100) + 'vh';
+    star.style.animationDelay = Utils.random(0, 3.5) + 's';
+    star.style.opacity = Utils.random(0.25, 1).toFixed(2);
+    
+    this.container.appendChild(star);
+  }
+};
+
+// Shooting star manager
+const ShootingStars = {
+  container: null,
+  timer: null,
+  activeAnimations: new Set(),
+  
+  init() {
+    this.container = Utils.$('#shooting-stars');
+    if (!CONFIG.prefersReduced) {
+      this.start();
+    }
+  },
+  
+  start() {
+    this.stop();
+    this.scheduleNext();
+  },
+  
+  stop() {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
+  },
+  
+  scheduleNext() {
+    const delay = Utils.random(4000, 10000);
+    this.timer = setTimeout(() => {
+      this.spawn();
+      this.scheduleNext();
+    }, delay);
+  },
+  
+  spawn() {
+    const el = document.createElement('div');
+    el.className = 'shoot';
+    
+    // Define multiple realistic shooting star paths
+    const paths = [
+      // Classic upper-left to lower-right
+      {
+        startX: Utils.random(-15, 20),
+        startY: Utils.random(5, 25),
+        angle: Utils.random(-25, -15),
+        distance: Utils.random(900, 1400)
+      },
+      // Steeper diagonal from upper-center
+      {
+        startX: Utils.random(20, 60),
+        startY: Utils.random(0, 15),
+        angle: Utils.random(-35, -25),
+        distance: Utils.random(800, 1200)
+      },
+      // Shallow path from left side
+      {
+        startX: Utils.random(-20, 10),
+        startY: Utils.random(10, 40),
+        angle: Utils.random(-15, -5),
+        distance: Utils.random(1000, 1600)
+      },
+      // Nearly horizontal from upper-left
+      {
+        startX: Utils.random(-10, 30),
+        startY: Utils.random(5, 20),
+        angle: Utils.random(-10, 5),
+        distance: Utils.random(1200, 1800)
+      },
+      // Vertical-ish from top
+      {
+        startX: Utils.random(30, 70),
+        startY: Utils.random(-5, 10),
+        angle: Utils.random(-50, -35),
+        distance: Utils.random(700, 1100)
+      }
+    ];
+    
+    const path = Utils.randomChoice(paths);
+    
+    el.style.left = path.startX + 'vw';
+    el.style.top = path.startY + 'vh';
+    
+    this.container.appendChild(el);
+    
+    // Calculate movement based on chosen path
+    const angleRad = (path.angle * Math.PI) / 180;
+    const dx = path.distance * Math.cos(angleRad);
+    const dy = path.distance * Math.sin(angleRad);
+    
+    // Vary duration based on distance and add randomness
+    const baseDuration = path.distance * 0.8;
+    const duration = baseDuration + Utils.random(-200, 300);
+    
+    const animation = el.animate([
+      { transform: `translate(0,0) rotate(${path.angle}deg)`, opacity: 1 },
+      { transform: `translate(${dx}px, ${dy}px) rotate(${path.angle}deg)`, opacity: 0 }
+    ], {
+      duration: Math.max(800, duration), // minimum 800ms
+      easing: 'linear',
+      fill: 'forwards'
+    });
+    
+    this.activeAnimations.add(animation);
+    animation.onfinish = () => {
+      this.activeAnimations.delete(animation);
+      el.remove();
+    };
+    
+    if (document.body.classList.contains('paused')) {
+      animation.pause();
+    }
+  },
+  
+  pause() {
+    this.activeAnimations.forEach(anim => anim.pause());
+  },
+  
+  resume() {
+    this.activeAnimations.forEach(anim => anim.play());
+  }
+};
+
+// Snow manager
+const Snow = {
+  container: null,
+  timer: null,
+  
+  init() {
+    this.container = Utils.$('#snow-container');
+  },
+  
+  start(density = 5) {
+    this.stop();
+    // Convert density (1-10) to interval (600ms-60ms)
+    const intervalMs = 660 - (density * 60);
+    this.timer = setInterval(() => this.createFlake(), intervalMs);
+  },
+  
+  stop() {
+    if (this.timer) clearInterval(this.timer);
+    this.timer = null;
+  },
+  
+  createFlake() {
+    const wrapper = document.createElement('div');
+    wrapper.classList.add('snowflake');
+    wrapper.innerHTML = Utils.randomChoice(CONFIG.snowflakeSVGs);
+    
+    const snowflake = wrapper.firstElementChild;
+    const depth = Math.random();
+    const size = 8 + depth * 28;
+    
+    snowflake.setAttribute('width', size);
+    snowflake.setAttribute('height', size);
+    
+    const startX = Utils.random(0, window.innerWidth);
+    const wind = Utils.random(-80, 80);
+    const fallY = window.innerHeight + 60;
+    const duration = 9 + (1 - depth) * 10;
+    const rotation = Utils.random(180, 540);
+    
+    wrapper.style.left = startX + 'px';
+    wrapper.style.top = '-60px';
+    wrapper.style.opacity = (0.35 + depth * 0.65).toFixed(2);
+    wrapper.style.transition = `transform ${duration}s linear, opacity ${duration}s linear`;
+    
+    this.container.appendChild(wrapper);
+    
+    requestAnimationFrame(() => {
+      wrapper.style.transform = `translate(${wind}px, ${fallY}px) rotate(${rotation}deg)`;
+      wrapper.style.opacity = '0';
+    });
+    
+    if (document.body.classList.contains('paused')) {
+      const current = getComputedStyle(wrapper).transition;
+      wrapper.style.transition = 'none';
+      wrapper.dataset.transition = current;
+    }
+    
+    setTimeout(() => wrapper.remove(), duration * 1000);
+  },
+  
+  pause() {
+    this.stop();
+    Utils.$$('.snowflake').forEach(el => {
+      const current = getComputedStyle(el).transition;
+      el.style.transition = 'none';
+      el.dataset.transition = current;
+    });
+  },
+  
+  resume(density) {
+    Utils.$$('.snowflake').forEach(el => {
+
+      if (el.dataset.transition) {
+        el.style.transition = el.dataset.transition;
+      }
+    });
+    this.start(density);
+  }
+};
+
+// Main controller
+const NightSky = {
+  isPaused: false,
+  toggleBtn: null,
+  densitySlider: null,
+  
+  init() {
+    this.toggleBtn = Utils.$('#toggle');
+    this.densitySlider = Utils.$('#density');
+    
+    this.setupEventListeners();
+    this.initializeComponents();
+    
+    if (!CONFIG.prefersReduced) {
+      this.resume();
+    } else {
+      this.pause();
+    }
+  },
+  
+  setupEventListeners() {
+    this.toggleBtn.addEventListener('click', () => {
+      this.isPaused ? this.resume() : this.pause();
+    });
+    
+    this.densitySlider.addEventListener('input', () => {
+      if (!this.isPaused) {
+        Snow.start(+this.densitySlider.value);
+      }
+    });
+  },
+  
+  initializeComponents() {
+    StarField.init();
+    ShootingStars.init();
+    Snow.init();
+  },
+  
+  pause() {
+    this.isPaused = true;
+    document.body.classList.add('paused');
+    
+    Snow.pause();
+    ShootingStars.pause();
+    
+    this.toggleBtn.textContent = 'Resume';
+  },
+  
+  resume() {
+    this.isPaused = false;
+    document.body.classList.remove('paused');
+    
+    Snow.resume(+this.densitySlider.value);
+    ShootingStars.resume();
+    
+    this.toggleBtn.textContent = 'Pause';
+  }
+};
+
+// Initialize when DOM is ready
+document.addEventListener('DOMContentLoaded', () => {
+  NightSky.init();
+});
+</script>
+</body>
+</html>
