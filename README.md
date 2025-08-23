@@ -15,7 +15,7 @@ A beautiful, interactive winter night sky scene with falling snow, twinkling sta
 
 ## 🎥 Demo
 
-[Live Demo](https://your-github-username.github.io/celestial-snowfall/)
+[Live Demo](https://philwilky.github.io/celestial-snowfall/)
 
 ## 🚀 Quick Start
 
