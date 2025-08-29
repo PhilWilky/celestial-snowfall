@@ -175,6 +175,7 @@ You're free to use this in personal and commercial projects. Just keep the copyr
 
 - Inspired by real winter nights and childhood snow days
 - Built with love for the web development community
+- Massive thanks to Ryan Brown for sharing the snowflakes and idea.
 - Special thanks to everyone who provides feedback and contributions
 
 ## 🔗 Links
